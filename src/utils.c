@@ -46,11 +46,29 @@ char *find_available(char *filename) {
     return path;
 }
 
+typedef struct {
+    char *alt_prefix;
+    char *prefix;
+    char *area;
+    char *suffix;
+    char *alt_area;
+} call_parts_t;
+
+static void free_call_parts(call_parts_t *cp) {
+    if (cp == NULL) {
+        return;
+    }
+    g_free(cp->alt_prefix);
+    g_free(cp->prefix);
+    g_free(cp->area);
+    g_free(cp->suffix);
+    g_free(cp->alt_area);
+    g_free(cp);
+}
+
 // split a call into alt_prefix-prefix-area-suffix-alt_area parts
-// returns true on success with all pointers being non-NULL
-static bool split_call(char *call,
-        char **alt_prefix, char **prefix, char **area,
-        char **suffix, char **alt_area) {
+// returns non-NULL on success with all pointers being also non-NULL
+static call_parts_t *split_call(char *call) {
 
     static const char *PATTERN = "^"
         "([A-Z0-9]+/)?"     // alt_prefix (optional)
@@ -66,36 +84,37 @@ static bool split_call(char *call,
         regex = g_regex_new(PATTERN, 0, 0, NULL);
     }
 
-    bool result = false;
+    call_parts_t *result = NULL;
     GMatchInfo *match_info;
     g_regex_match(regex, call, 0, &match_info);
 
     if (g_match_info_matches(match_info)) {
-        *alt_prefix = g_match_info_fetch(match_info, 1);
-        if (*alt_prefix == NULL) {
-            *alt_prefix = g_strdup("");
+        result = g_new(call_parts_t, 1);
+        result->alt_prefix = g_match_info_fetch(match_info, 1);
+        if (result->alt_prefix == NULL) {
+            result->alt_prefix = g_strdup("");
         }
-        *prefix = g_match_info_fetch(match_info, 2);
-        *area = g_match_info_fetch(match_info, 3);
-        *suffix = g_match_info_fetch(match_info, 4);
-        *alt_area = g_match_info_fetch(match_info, 5);
-        if (*alt_area == NULL) {
-            *alt_area = g_strdup("");
+        result->prefix = g_match_info_fetch(match_info, 2);
+        result->area = g_match_info_fetch(match_info, 3);
+        result->suffix = g_match_info_fetch(match_info, 4);
+        result->alt_area = g_match_info_fetch(match_info, 5);
+        if (result->alt_area == NULL) {
+            result->alt_area = g_strdup("");
         }
 
         // for an invalid single letter prefix
         // shift the first digit of area to it
         // example: S 52 -> S5 2
         // valid single letter prefixes: B F G I K M N R W
-        if (strlen(*prefix) == 1 && strchr("BFGIKMNRW", *prefix[0]) == NULL
-                && strlen(*area) >= 2) {
-            char *p = g_strdup_printf("%s%c", *prefix, *area[0]);
-            char *q = g_strdup(*area + 1);
-            g_free(*prefix); *prefix = p;
-            g_free(*area); *area = q;
+        if (strlen(result->prefix) == 1
+                && strchr("BFGIKMNRW", result->prefix[0]) == NULL
+                && strlen(result->area) >= 2) {
+            char *p = g_strdup_printf("%s%c", result->prefix, result->area[0]);
+            char *q = g_strdup(result->area + 1);
+            g_free(result->prefix); result->prefix = p;
+            g_free(result->area); result->area = q;
         }
 
-        result = true;
     }
 
     g_match_info_free(match_info);
@@ -115,19 +134,14 @@ void get_partial_callsign_alt(char *call1, char *call2, char *partial) {
     }
 #endif
 
-    char *alt_prefix1, *prefix1, *area1, *suffix1, *alt_area1;
-    char *alt_prefix2, *prefix2, *area2, *suffix2, *alt_area2;
-
-    if (!split_call(call1, &alt_prefix1, &prefix1, &area1, &suffix1, &alt_area1)) {
+    call_parts_t *cp1 = split_call(call1);
+    if (cp1 == NULL) {
         strcpy(partial, call2);         // can't split call1, send as-is
         return;
     }
-    if (!split_call(call2, &alt_prefix2, &prefix2, &area2, &suffix2, &alt_area2)) {
-        g_free(alt_prefix1);
-        g_free(prefix1);
-        g_free(area1);
-        g_free(suffix1);
-        g_free(alt_area1);
+    call_parts_t *cp2 = split_call(call2);
+    if (cp2 == NULL) {
+        free_call_parts(cp1);
         strcpy(partial, call2);         // can't split call2, send as-is
         return;
     }
@@ -138,29 +152,29 @@ void get_partial_callsign_alt(char *call1, char *call2, char *partial) {
 #define SUFFIX      8
 #define ALT_AREA    16
 
-    int change = (strcmp(alt_prefix1, alt_prefix2) ? ALT_PREFIX : 0);
-    change += (strcmp(prefix1, prefix2) ? PREFIX : 0);
-    change += (strcmp(area1, area2) ? AREA : 0);
-    change += (strcmp(suffix1, suffix2) ? SUFFIX : 0);
-    change += (strcmp(alt_area1, alt_area2) ? ALT_AREA : 0);
+    int change = (strcmp(cp1->alt_prefix, cp2->alt_prefix) ? ALT_PREFIX : 0);
+    change += (strcmp(cp1->prefix, cp2->prefix) ? PREFIX : 0);
+    change += (strcmp(cp1->area, cp2->area) ? AREA : 0);
+    change += (strcmp(cp1->suffix, cp2->suffix) ? SUFFIX : 0);
+    change += (strcmp(cp1->alt_area, cp2->alt_area) ? ALT_AREA : 0);
 
 #if 0
 printf("1:|%s|%s|%s|%s|%s|\n", alt_prefix1, prefix1, area1, suffix1, alt_area1);
-printf("2:|%s|%s|%s|%s|%s|\n", alt_prefix2, prefix2, area2, suffix2, alt_area2);
+printf("2:|%s|%s|%s|%s|%s|\n", alt_prefix2, prefix2, area2, cp2->suffix, alt_area2);
 printf("c=%d\n", change);
 #endif
 
     // handle removal of optional parts
-    if (change == ALT_AREA && strlen(alt_area2) == 0) {
+    if (change == ALT_AREA && strlen(cp2->alt_area) == 0) {
         change = SUFFIX;    // treat as suffix change
     }
-    if (change == ALT_PREFIX && strlen(alt_prefix2) == 0) {
+    if (change == ALT_PREFIX && strlen(cp2->alt_prefix) == 0) {
         change = PREFIX;    // treat as prefix change
     }
 
     switch (change) {
         case ALT_PREFIX:
-            strcpy(partial, alt_prefix2);
+            strcpy(partial, cp2->alt_prefix);
 #if 0
             if (strlen(partial) >= 3) {
                 partial[strlen(partial) - 1] = 0;   // suppress '/'
@@ -169,56 +183,56 @@ printf("c=%d\n", change);
             break;
 
         case PREFIX:
-            strcpy(partial, prefix2);
-            if (strlen(prefix2) == 1) { // if too short,
-                partial[1] = area2[0];  // add first digit of area
+            strcpy(partial, cp2->prefix);
+            if (strlen(partial) == 1) { // if too short,
+                partial[1] = cp2->area[0];  // add first digit of area
                 partial[2] = 0;
             }
             break;
 
         case AREA:
             // prepend prefix if area is too short
-            strcpy(partial, (strlen(area2) == 1 ? prefix2 : ""));
-            strcat(partial, area2);
+            strcpy(partial, (strlen(cp2->area) == 1 ? cp2->prefix : ""));
+            strcat(partial, cp2->area);
             break;
 
         case SUFFIX:
             // prepend last digit of area if suffix is too short
-            if (strlen(suffix2) == 1) {
-                partial[0] = area2[strlen(area2) - 1];
+            if (strlen(cp2->suffix) == 1) {
+                partial[0] = cp2->area[strlen(cp2->area) - 1];
                 partial[1] = 0;
             } else {
                 partial[0] = 0;
             }
-            strcat(partial, suffix2);
+            strcat(partial, cp2->suffix);
             break;
 
         case ALT_AREA:
-            strcpy(partial, alt_area2);
+            strcpy(partial, cp2->alt_area);
             break;
 
         case ALT_PREFIX + PREFIX:
-            sprintf(partial, "%s%s", alt_prefix2, prefix2);
+            sprintf(partial, "%s%s", cp2->alt_prefix, cp2->prefix);
             break;
 
         case PREFIX + AREA:
-            sprintf(partial, "%s%s", prefix2, area2);
+            sprintf(partial, "%s%s", cp2->prefix, cp2->area);
             break;
 
         case AREA + SUFFIX:
-            sprintf(partial, "%s%s", area2, suffix2);
+            sprintf(partial, "%s%s", cp2->area, cp2->suffix);
             break;
 
         case SUFFIX + ALT_AREA:
-            sprintf(partial, "%s%s", suffix2, alt_area2);
+            sprintf(partial, "%s%s", cp2->suffix, cp2->alt_area);
             break;
 
         default:                        // for any other combination
             strcpy(partial, call2);     // send as-is
     }
 
-    g_free(alt_prefix1); g_free(prefix1); g_free(area1); g_free(suffix1); g_free(alt_area1);
-    g_free(alt_prefix2); g_free(prefix2); g_free(area2); g_free(suffix2); g_free(alt_area2);
+    free_call_parts(cp1);
+    free_call_parts(cp2);
 }
 
 /* \brief get a substring from corrected call to repeat it
