@@ -133,17 +133,16 @@ void get_partial_callsign_alt(char *call1, char *call2, char *partial) {
         return;
     }
 #endif
+    strcpy(partial, call2);     // default: send as-is
 
     call_parts_t *cp1 = split_call(call1);
     if (cp1 == NULL) {
-        strcpy(partial, call2);         // can't split call1, send as-is
-        return;
+        return;                 // can't split call1
     }
     call_parts_t *cp2 = split_call(call2);
     if (cp2 == NULL) {
         free_call_parts(cp1);
-        strcpy(partial, call2);         // can't split call2, send as-is
-        return;
+        return;                 // can't split call2
     }
 
 #define ALT_PREFIX  1
@@ -227,8 +226,8 @@ printf("c=%d\n", change);
             sprintf(partial, "%s%s", cp2->suffix, cp2->alt_area);
             break;
 
-        default:                        // for any other combination
-            strcpy(partial, call2);     // send as-is
+        default:        // for any other combination send as-is
+            ;
     }
 
     free_call_parts(cp1);
