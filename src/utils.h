@@ -23,5 +23,6 @@
 
 char *find_available(char *filename);
 void get_partial_callsign(char *call1, char *call2, char *partial);
+void get_partial_callsign_alt(char *call1, char *call2, char *partial);
 
 #endif /* UTILS_H */
